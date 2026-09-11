@@ -131,17 +131,230 @@ This was useful for prioritization: visible test failures were not necessarily t
 
 ## Data model and scaling decisions
 
-I kept SQLite and the supplied Python scaffold because it provides a zero-dependency, reproducible submission. Moving the assessment to a heavier platform would not improve the correctness of the result and would make clean-checkout reproduction harder.
+### Logical model
 
-The repaired model establishes explicit grains:
+The repaired warehouse uses an explicit order-level revenue grain:
 
-* `stg_order`: one canonical row per `order_id`
-* `stg_order_priced`: one enriched row per `order_id`
-* `fact_order`: one Finance-eligible revenue row per `order_id`
+| Model                 | Grain                                | Purpose                                                                  |
+| --------------------- | ------------------------------------ | ------------------------------------------------------------------------ |
+| `raw_*`               | source landing grain                 | Immutable source evidence                                                |
+| `dim_date`            | one row per calendar date            | Calendar and fiscal reporting                                            |
+| `dim_player`          | one row per player                   | Player attributes used for reporting and eligibility                     |
+| `dim_title`           | one row per title                    | Title reporting attributes                                               |
+| `dim_platform`        | one row per platform                 | Platform dimension                                                       |
+| `dim_studio`          | one row per studio                   | Studio reporting attributes                                              |
+| `bridge_title_studio` | one title/studio/credit relationship | Supports the many-to-many title/studio relationship                      |
+| `stg_order`           | one row per `order_id`               | Canonical order after handling replayed landings                         |
+| `stg_order_priced`    | one row per `order_id`               | Order enriched with refunds, FX, and historically effective platform fee |
+| `fact_order`          | one eligible business order          | Finance revenue fact                                                     |
 
-Order-item detail is deliberately not joined into the revenue fact because order-level money cannot be repeated safely at item grain without an allocation rule.
+The most important modeling decision is that `fact_order` remains at **order grain**.
 
-For a production implementation at approximately 50× volume with hourly landings, I would replace the full rebuild with incremental ingestion keyed by source ingestion timestamp/order ID, perform merge/upsert handling for replayed records, materialize effective-dated FX and fee lookups, partition/index facts by order date, and retain the same business-rule tests in CI.
+`raw_order_items` is intentionally not joined directly into the revenue fact because gross revenue, refunds, FX, and platform fees are defined at order level. Repeating those measures across item rows would multiply revenue. If item-level revenue reporting becomes a requirement, I would build a separate item fact and introduce an explicit Finance-approved allocation rule rather than implicitly duplicating order-level money.
+
+### Why the assessment implementation uses a full rebuild
+
+The supplied harness is small, local, and SQLite-based. For the assessment I kept that architecture because it provides:
+
+* deterministic clean-checkout reproduction;
+* no external services or dependencies;
+* a simple way for the reviewer to reproduce the complete result with one command;
+* an easy way to prove all transformations from immutable landing data.
+
+For this dataset, the full rebuild is appropriate.
+
+I would **not** use the same physical execution pattern once the data is approximately 50× larger and arrives hourly.
+
+### Production execution at 50× volume
+
+The logical model above would remain the same, but the physical execution would become incremental.
+
+#### 1. Raw ingestion would remain append-only
+
+Hourly source batches would be landed without mutating prior records.
+
+Each batch would preserve metadata such as:
+
+```text
+source ingestion timestamp
+batch/run identifier
+source filename or object
+business key
+```
+
+The raw layer would remain the audit trail and would not be deduplicated in place.
+
+This is important because the supplied data already demonstrates why replay-safe ingestion matters: the March extract was loaded twice.
+
+#### 2. Canonical orders would be incrementally merged
+
+Instead of rebuilding `stg_order` from the entire order history every hour, each run would identify only new or changed `order_id` values since the previous successful watermark.
+
+For those keys:
+
+```text
+new raw order versions
+        ↓
+rank by ingested_at
+        ↓
+select canonical version
+        ↓
+MERGE / UPSERT into canonical order table
+```
+
+The operation would be idempotent: replaying the same batch would not create another business order.
+
+The canonical business key remains:
+
+```text
+order_id
+```
+
+#### 3. Refunds must also trigger historical-order updates
+
+Incrementality cannot be based only on newly arrived orders.
+
+A refund can arrive after the original order, while Finance recognizes the adjustment against the original order date. Therefore each hourly run would construct a set of **affected order IDs** from both:
+
+```text
+new/changed orders
+UNION
+new/changed refunds
+```
+
+Only those orders would need to be repriced and merged into `fact_order`.
+
+This allows a refund received today to correctly update revenue for an order originally recognized in a prior fiscal period without rebuilding every historical order.
+
+#### 4. FX and platform fees would be effective-dated lookup dimensions
+
+The production model would preserve the same semantics used in this submission:
+
+```text
+FX:
+last published rate where rate_date <= order_date
+
+platform fee:
+effective_from <= order_date <= effective_to
+```
+
+At larger scale I would materialize and index these lookup structures rather than repeatedly scanning their raw landing tables.
+
+Natural access paths would include:
+
+```text
+FX:            (currency_code, rate_date)
+platform fee:  (platform_code, effective_from, effective_to)
+```
+
+Because these tables are small relative to orders, they could also be materialized into date-effective lookup tables where appropriate.
+
+#### 5. The revenue fact would be incrementally upserted
+
+`fact_order` would continue to enforce:
+
+```text
+one row per order_id
+```
+
+Changed eligible orders would be inserted or updated. Orders that become ineligible because of corrected source data would be removed or soft-invalidated according to the warehouse's audit strategy.
+
+For an analytical warehouse supporting large scans, I would partition the fact by `order_date` and cluster/index around common access patterns such as:
+
+```text
+order_date
+title_id
+platform_code
+player_id
+```
+
+The exact physical implementation would depend on the target warehouse.
+
+#### 6. Dimensions would be maintained independently
+
+The supplied attributes are sufficient for Type 1 dimensions in this assessment.
+
+In production I would explicitly decide attribute history requirements with the reporting team:
+
+* title/studio/platform descriptive corrections could use Type 1 where historical values do not need preservation;
+* player attributes would use Type 2 only if Finance or Analytics needs reporting based on the attribute value that was true at order time;
+* internal/test eligibility should ideally be supplied as an authoritative player/account attribute instead of inferred permanently from an email domain.
+
+The fiscal date dimension is deterministic and would be generated ahead of the reporting horizon rather than rebuilt every hour.
+
+#### 7. Hourly orchestration
+
+An hourly production run would conceptually be:
+
+```text
+land source batch
+      ↓
+validate batch / preserve raw rows
+      ↓
+identify affected order_ids
+      ↓
+merge canonical orders
+      ↓
+aggregate changed refunds
+      ↓
+apply effective-dated FX + fee rules
+      ↓
+merge affected fact_order rows
+      ↓
+run data-quality / business-rule tests
+      ↓
+publish successful watermark
+```
+
+The watermark would advance only after a successful transaction/run so failed batches could be rerun safely.
+
+### Data quality at larger scale
+
+The tests added in this submission are intended to protect model invariants rather than a hardcoded revenue result.
+
+They validate rules such as:
+
+* one canonical order per `order_id`;
+* one eligible order per revenue fact row;
+* USD FX identity;
+* non-USD as-of FX;
+* historically effective platform fees;
+* refund reconciliation to the system of record;
+* Finance revenue arithmetic;
+* correct fiscal calendar mapping.
+
+In production these same checks would run in CI for model changes and as post-load data-quality checks for hourly batches.
+
+I would additionally monitor operational metrics such as:
+
+```text
+raw rows received per batch
+distinct business keys
+duplicate/replay rate
+orders inserted/updated
+refund-driven historical updates
+missing FX/fee lookups
+rejected records
+batch latency
+```
+
+### Technology trade-off
+
+SQLite is appropriate for this assessment because the goal is a self-contained and reproducible investigation. It is not my proposed warehouse for sustained 50× hourly production volume.
+
+On a production analytical platform I would use the warehouse's native incremental capabilities—such as `MERGE`, partitioning, clustering/indexing, orchestration, and transactional batch metadata—while retaining the **same logical grains and Finance rules demonstrated here**.
+
+The important architectural decision is therefore not SQLite versus a specific cloud product; it is preserving:
+
+```text
+immutable raw evidence
+→ replay-safe canonical order
+→ effective-dated pricing
+→ one-row-per-order Finance fact
+```
+
+as volume and ingestion frequency increase.
+
 
 ---
 
@@ -182,6 +395,6 @@ They are added inside the tests folder, these are:
 |t09_fact_matches_finance_scope.sql|Fact_order must contain exactly the orders eligible under Finance scope|
 |t10_fx_policy.sql|FX must be 1 for USD and last published rate on or before order date otherwise|
 |t11_platform_fee_policy.sql|Platform fee must be the contract rate effective on the order date|
-|t12_refunds_match_system_of_records.sql|Staged refunds must reconcile to the refunds system of record|
+|t12_refunds_match_system_of_record.sql|Staged refunds must reconcile to the refunds system of record|
 |t13_revenue_math.sql|Revenue measures must follow the Finance net revenue formula|
 |t14_fiscal_calendar.sql|Fiscal calendar must follow an October-start fiscal year|

@@ -1,4 +1,6 @@
--- Dimensions. These were the last thing I got working and I think they're fine. -- R.C.
+-- Reporting dimensions and fiscal calendar.
+-- Revenue remains at order grain; title/studio relationships are modeled
+-- separately to avoid changing the fact grain.
 
 DROP TABLE IF EXISTS dim_title;
 CREATE TABLE dim_title AS
