@@ -13,9 +13,12 @@ DROP TABLE IF EXISTS bridge_title_studio;
 CREATE TABLE bridge_title_studio AS
 SELECT title_id, studio_id, credit_role FROM raw_title_studio_credits;
 
+-- is_internal_test is a proxy (email_domain = 'twinhearth.test'): source systems don't carry an
+-- explicit internal/QA flag, so this is the best signal available. Revisit if Finance adds one.
 DROP TABLE IF EXISTS dim_player;
 CREATE TABLE dim_player AS
-SELECT player_id, country_code, currency_code, signup_date, acquisition_channel, email_domain
+SELECT player_id, country_code, currency_code, signup_date, acquisition_channel, email_domain,
+       CASE WHEN email_domain = 'twinhearth.test' THEN 1 ELSE 0 END AS is_internal_test
 FROM raw_players;
 
 DROP TABLE IF EXISTS dim_platform;
@@ -38,7 +41,7 @@ SELECT dt                                                              AS date,
        'FY' || CASE WHEN CAST(strftime('%m', dt) AS INTEGER) >= 10
                     THEN CAST(strftime('%Y', dt) AS INTEGER) + 1
                     ELSE CAST(strftime('%Y', dt) AS INTEGER) END       AS fiscal_year,
-       ((CAST(strftime('%m', dt) AS INTEGER) - 10) % 12) / 3 + 1       AS fiscal_quarter_no,
-       ((CAST(strftime('%m', dt) AS INTEGER) - 10) % 12) + 1           AS fiscal_month_no,
+       ((CAST(strftime('%m', dt) AS INTEGER) + 2) % 12) / 3 + 1       AS fiscal_quarter_no,
+       ((CAST(strftime('%m', dt) AS INTEGER) + 2) % 12) + 1           AS fiscal_month_no,
        CASE WHEN strftime('%w', dt) IN ('0','6') THEN 1 ELSE 0 END     AS is_weekend
 FROM d;
