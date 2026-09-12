@@ -2,6 +2,28 @@
 
 Reproduce with: `bash bin/run.sh` (or `python3 bin/build.py && python3 bin/test.py`).
 
+## Independent cross-check
+
+Before finalizing, I re-derived this pipeline from scratch a second time from a written
+description of an independent implementation (a second AI-assisted attempt, built without access to
+this repo's SQL) and diffed the two, row by row, against the real data — rather than just trusting
+either number on its own.
+
+The two implementations agreed on every defect and every fix except one: whether a **USD-denominated
+order** should be run through `raw_fx_rates` at all. `raw_fx_rates` carries a `USD` row for every
+date, but its value drifts (0.897–1.065), never exactly 1.0. This pipeline treats USD as the
+reporting currency and passes it through unconverted (`rate_to_usd = 1.0`); the other implementation
+joined it through the table like any other currency. `REVENUE_POLICY.md`, "Currency": *"Non-USD
+orders are converted using the last published rate..."* — the explicit scoping to non-USD is why I
+read USD as pass-through.
+
+Verified precisely, not just argued: recomputing Q2 with USD run through `raw_fx_rates` (instead of
+1.0) reproduces the other implementation's total **exactly** ($318,550.72) and matches its five
+per-title figures to the cent. The full $10,147.22 gap between the two pipelines is that one design
+decision — nothing else, once compared line by line. `t14_usd_orders_not_converted.sql` asserts the
+position this repo takes (`gross_usd = gross_local` for `currency_code = 'USD'`); if this decision is
+ever revisited, that's the one test that should start failing.
+
 ## Defects found
 
 | # | What was wrong | How I found it | What it was worth (FY2026 Q2, USD and %) | Fix |
