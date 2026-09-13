@@ -38,7 +38,7 @@ SELECT dt                                                              AS date,
        'FY' || CASE WHEN CAST(strftime('%m', dt) AS INTEGER) >= 10
                     THEN CAST(strftime('%Y', dt) AS INTEGER) + 1
                     ELSE CAST(strftime('%Y', dt) AS INTEGER) END       AS fiscal_year,
-       ((CAST(strftime('%m', dt) AS INTEGER) - 10) % 12) / 3 + 1       AS fiscal_quarter_no,
-       ((CAST(strftime('%m', dt) AS INTEGER) - 10) % 12) + 1           AS fiscal_month_no,
+       ((CAST(strftime('%m', dt) AS INTEGER) + 2) % 12) / 3 + 1        AS fiscal_quarter_no,
+       ((CAST(strftime('%m', dt) AS INTEGER) + 2) % 12) + 1            AS fiscal_month_no,
        CASE WHEN strftime('%w', dt) IN ('0','6') THEN 1 ELSE 0 END     AS is_weekend
 FROM d;

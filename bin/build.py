@@ -13,7 +13,7 @@ BUILD  = os.path.join(ROOT, "build")
 DB     = os.path.join(BUILD, "warehouse.db")
 
 RAW_INDEXES = [
-    "CREATE INDEX IF NOT EXISTS ix_raw_orders_id  ON raw_orders(order_id)",
+    "CREATE INDEX IF NOT EXISTS ix_raw_orders_id  ON raw_orders(order_id, ingested_at DESC)",
     "CREATE INDEX IF NOT EXISTS ix_raw_players_id ON raw_players(player_id)",
     "CREATE INDEX IF NOT EXISTS ix_raw_items_id   ON raw_order_items(order_id)",
     "CREATE INDEX IF NOT EXISTS ix_raw_refunds_id ON raw_refunds(order_id)",
@@ -21,17 +21,34 @@ RAW_INDEXES = [
     "CREATE INDEX IF NOT EXISTS ix_raw_fees       ON raw_platform_fees(platform_code, effective_from)",
 ]
 
+def batches(rows, batch_size=10_000):
+    while True:
+        batch = []
+        for _ in range(batch_size):
+            try:
+                batch.append(next(rows))
+            except StopIteration:
+                break
+        if not batch:
+            return
+        yield batch
+
+
 def load_raw(con):
     for fn in sorted(os.listdir(DATA)):
         if not fn.endswith(".csv"):
             continue
         table = "raw_" + fn[:-4]
-        with open(os.path.join(DATA, fn)) as f:
-            r = csv.reader(f); cols = next(r); rows = list(r)
-        con.execute(f"DROP TABLE IF EXISTS {table}")
-        con.execute(f"CREATE TABLE {table} ({', '.join(c + ' TEXT' for c in cols)})")
-        con.executemany(f"INSERT INTO {table} VALUES ({', '.join('?' * len(cols))})", rows)
-        print(f"  loaded {table:<28} {len(rows):>8,} rows")
+        with open(os.path.join(DATA, fn), newline="") as f:
+            r = csv.reader(f)
+            cols = next(r)
+            con.execute(f"DROP TABLE IF EXISTS {table}")
+            con.execute(f"CREATE TABLE {table} ({', '.join(c + ' TEXT' for c in cols)})")
+            row_count = 0
+            for batch in batches(r):
+                con.executemany(f"INSERT INTO {table} VALUES ({', '.join('?' * len(cols))})", batch)
+                row_count += len(batch)
+        print(f"  loaded {table:<28} {row_count:>8,} rows")
     for ddl in RAW_INDEXES:
         con.execute(ddl)
     con.commit()
