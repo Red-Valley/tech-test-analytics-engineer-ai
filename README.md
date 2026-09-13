@@ -41,6 +41,17 @@ Write down what you see. That is your starting point.
 > `data/` is read-only and checksum-verified. `bin/test.py` refuses to run if a landing file
 > changed. Fix the pipeline, not the inputs.
 
+## Run the repaired pipeline
+
+From a clean checkout, run:
+
+```bash
+python bin/run.py
+```
+
+This one command rebuilds the warehouse, validates all assertions, and prints FY2026 Q2 net revenue
+by title and in total. See `docs/MODEL_DESIGN.md` for the fact grain and production scaling path.
+
 ## What to deliver
 
 ### 1. A pipeline that produces the right number
