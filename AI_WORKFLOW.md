@@ -10,6 +10,17 @@ results, not intuition, decide what's a defect. Every claim in `FINDINGS.md` is 
 ran in this session against `build/warehouse.db` or the raw CSVs — nothing in there is from
 "knowing what these bugs usually look like."
 
+I also used two other AI tools — ChatGPT and Gemini — as independent second and third opinions on
+the same brief, deliberately without giving either one access to this repo's actual SQL. The goal
+was to see whether a differently-built pipeline landed on the same number, and if not, why. Both
+disagreed with my total; both disagreements were run down to the cent against the real data rather
+than settled by argument. That process, and what it turned up, is documented in `FINDINGS.md` under
+"Independent cross-checks" — including a real formula defect in one of the other implementations
+(refunds weren't netting the platform fee back, per `REVENUE_POLICY.md`'s explicit requirement that
+"the platform refunds its fee along with them," which produced negative net revenue on 462 orders).
+I did not otherwise use ChatGPT or Gemini to write any of this repo's SQL, tests, or documentation —
+Claude did that work; the other two tools were reviewers, not authors.
+
 ## 2. Concrete prompts (self-directed, since this was one continuous session) and what came back
 
 1. **"Run the pipeline and tests exactly as delivered before touching anything."**

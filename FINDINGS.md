@@ -6,56 +6,56 @@ Reproduce with: `bash bin/run.sh` (or `python3 bin/build.py && python3 bin/test.
 
 Before finalizing, I didn't just trust my own number. I re-derived this pipeline two more times,
 independently, and reconciled every discrepancy against the real data instead of arguing from logic
-alone. Two other AI-assisted attempts at the same brief produced two different totals; both
-disagreements turned out to be fully explainable, and reconciling them surfaced one genuine defect I
-hadn't caught on my own (see Cross-check B).
+alone. Two other AI tools (ChatGPT and Gemini), given the same brief independently, produced two
+different totals; both disagreements turned out to be fully explainable, and reconciling them
+surfaced one genuine defect I hadn't caught on my own (see Cross-check B).
 
-### Cross-check A — a second implementation that reached $318,550.72
+### Cross-check A (ChatGPT) — reached $318,550.72
 
 **The gap:** $10,147.22 (3.1%) below mine, on every one of the five titles proportionally.
 
-**Method:** reproduced the other implementation's described logic verbatim as a second SQL pipeline
-against this repo's real data, then diffed every order, side by side, against mine.
+**Method:** reproduced ChatGPT's described logic verbatim as a second SQL pipeline against this
+repo's real data, then diffed every order, side by side, against mine.
 
 **Finding:** the two pipelines agreed on every defect and every fix except one — whether a
 **USD-denominated order** should be run through `raw_fx_rates` at all. `raw_fx_rates` carries a `USD`
 row for every date, but its value drifts (0.897–1.065), never exactly 1.0. This pipeline treats USD
-as the reporting currency and passes it through unconverted (`rate_to_usd = 1.0`); the other
-implementation joined it through the table like any other currency. `REVENUE_POLICY.md`, "Currency":
+as the reporting currency and passes it through unconverted (`rate_to_usd = 1.0`); ChatGPT's joined
+it through the table like any other currency. `REVENUE_POLICY.md`, "Currency":
 *"Non-USD orders are converted using the last published rate..."* — the explicit scoping to non-USD
 is why I read USD as pass-through.
 
 **Verified, not just argued:** recomputing Q2 with USD run through `raw_fx_rates` (instead of 1.0)
-reproduces the other implementation's total **exactly** ($318,550.72) and matches its five per-title
+reproduces ChatGPT's total **exactly** ($318,550.72) and matches its five per-title
 figures to the cent. The entire gap is that one design decision, nothing else.
 `t14_usd_orders_not_converted.sql` asserts the position this repo takes; if that decision is ever
 revisited, that's the one test that should start failing.
 
-### Cross-check B — a third implementation that reached $260,481.97
+### Cross-check B (Gemini) — reached $260,481.97
 
 **The gap:** $68,215.97 (26.2%) below mine.
 
-**Method:** this one supplied runnable SQL, not just a description, so I ran it **verbatim** against
+**Method:** Gemini supplied runnable SQL, not just a description, so I ran it **verbatim** against
 the delivered (unfixed) warehouse and reproduced its number exactly — $260,481.97, same five titles,
 to the cent. From there I diffed its query logic against mine line by line.
 
-**Findings:** four of the five differences were expected — this implementation, by its own account,
+**Findings:** four of the five differences were expected — Gemini, by its own account,
 had not yet deduplicated the March orders (#2), excluded internal accounts (#3), excluded `pending`
 orders (#6), or fixed the weekend FX gap / USD noise (#7, #8). Those are known, already-quantified
-gaps. The fifth difference was new, and it's a genuine defect this implementation introduced rather
-than left unfixed:
+gaps. The fifth difference was new, and it's a genuine defect Gemini's implementation introduced
+rather than left unfixed:
 
 Its refund formula was `(gross × (1 − fee_pct) − refund) × rate`. Mine is
 `(gross − refund) × rate × (1 − fee_pct)`. These are **not algebraically equivalent** — the difference
 works out to exactly `refund × rate × fee_pct` per order, always in the same direction. `REVENUE_POLICY.md`,
 "Net revenue"/"Refunds": *"the platform refunds its fee along with them"* — meaning the fee that's
-actually retained should shrink along with the refunded portion. The other formula keeps the fee
+actually retained should shrink along with the refunded portion. Gemini's formula keeps the fee
 un-refunded and simply subtracts the raw refund on top, which:
 
 - **costs $5,378.12** in Q2 in isolation (the fee-on-refunded-amount that should have been given back but wasn't), and
 - produces **462 orders with negative net revenue** in Q2 alone — a fully-refunded $9.53 order comes out to **−$2.38** instead of **$0.00**. This directly violates `t06_measures_not_negative`, one of the seven checks that shipped with the original, unfixed pipeline — so this formula, had it been used here, would have failed a test that was already sitting in the repo.
 
-**Verified, not just argued:** running the third implementation's exact SQL against the delivered,
+**Verified, not just argued:** running Gemini's exact SQL against the delivered,
 unfixed warehouse reproduces $260,481.97 precisely; substituting only its refund formula into an
 otherwise-identical query and comparing to the correct formula isolates the $5,378.12 and the 462
 negative rows above.
