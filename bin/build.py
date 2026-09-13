@@ -47,16 +47,30 @@ def run_models(con):
         con.commit()
         print(f"  ran    {fn:<28} {time.time() - t0:>7.2f}s")
 
+def validate_model_guards(con):
+    """Fail the build if source duplicate keys disagree on business values."""
+    checks = [
+        ("orders", "stg_order_conflicts"),
+        ("order items", "stg_order_item_conflicts"),
+    ]
+    conflicts = []
+    for label, table in checks:
+        count = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        if count:
+            conflicts.append(f"{label}: {count:,} conflicting keys")
+    if conflicts:
+        raise RuntimeError("conflicting duplicate business keys: " + "; ".join(conflicts))
+
 def main():
     os.makedirs(BUILD, exist_ok=True)
-    if "--keep" not in sys.argv and os.path.exists(DB):
-        os.remove(DB)
+    # Reuse the SQLite file for a rebuild. This is portable on Windows, where
+    # removing a database that another reader has open raises PermissionError.
     con = sqlite3.connect(DB)
     if "--keep" not in sys.argv:
         print("loading raw layer")
         load_raw(con)
-    print("running models")
     run_models(con)
+    validate_model_guards(con)
     con.close()
     print(f"\nbuilt {os.path.relpath(DB, ROOT)}")
 
