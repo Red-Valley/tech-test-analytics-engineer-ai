@@ -38,6 +38,16 @@ python3 bin/test.py
 
 Write down what you see. That is your starting point.
 
+After the repair, one command rebuilds the warehouse, runs all assertions, and prints the
+verified FY2026 Q2 result:
+
+```bash
+python3 bin/run.py
+```
+
+The original two commands (`python3 bin/build.py` followed by `python3 bin/test.py`) remain
+available when the report output is not needed.
+
 > `data/` is read-only and checksum-verified. `bin/test.py` refuses to run if a landing file
 > changed. Fix the pipeline, not the inputs.
 
