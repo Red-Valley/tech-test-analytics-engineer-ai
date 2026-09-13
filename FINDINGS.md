@@ -158,19 +158,66 @@ to do properly rather than superficially — better to say so than fix them sile
 - **Dimensions.** `dim_player`, `dim_title`, `dim_studio`, `dim_platform`, `dim_date` are unchanged in
   shape from the delivered pipeline except `dim_player.is_internal` (new) and the `dim_date` fiscal
   math fix — both additive, not restructuring, so nothing downstream that already joins to them
-  breaks.
-- **At 50x the volume:** the join-based FX/fee "as-of" lookups (`ORDER BY ... LIMIT 1` correlated
-  subqueries) are the first thing I'd replace — they're correct but re-scan per row. At 50x I'd
-  pre-join each `(currency_code, date)` and `(platform_code, date)` once into a date-spine table (a
-  single window-function pass instead of a correlated subquery per order), which is the same
-  as-of-join *logic*, just computed once instead of once per row.
-- **Landing hourly instead of daily:** the dedup fix for defect #2 (`MAX(ingested_at)` per
-  `order_id`) already behaves correctly as an incremental/idempotent upsert key, not just a
-  full-rebuild patch — re-landing the same order twice in an hour, or the loader retrying after a
-  partial failure, resolves the same way it does now. What's genuinely missing for hourly landing
-  (and out of scope per the README) is a watermark so `bin/build.py` doesn't re-scan all of history
-  every run, and a policy for late-arriving refunds against orders from a prior, already-closed
-  period — right now a refund landing next week against last month's order still nets correctly
-  (revenue is recomputed from source each run), but that only works because this is a full rebuild;
-  an incremental model would need to explicitly re-open the affected order's partition.
+  breaks. The title/studio bridge (`bridge_title_studio`, per the contractor's original design)
+  stays independent of `fact_order`'s grain on purpose — a title can credit multiple studios, but
+  revenue is recognized once, against the order, not fanned out across every credited studio.
 
+### What changes at 50x volume, landing hourly instead of once
+
+The logical model doesn't change — order grain, effective-dated FX/fee, refunds netted from the
+system of record. What changes is how each stage is *computed*, because "rebuild everything from
+scratch" (what `bin/build.py` does today) stops being viable once a run has to finish in minutes,
+not seconds, every hour:
+
+```
+raw landing (append-only, hourly)
+        │
+        ▼
+watermark: which order_ids are new or touched since the last successful run?
+   (an order is "touched" if it has a new/changed row in orders, OR a new
+    row in refunds against an order from any prior period)
+        │
+        ▼
+re-run defect #2's dedup logic, scoped to touched order_ids only
+   (MAX(ingested_at) per order_id — already idempotent, just needs a WHERE)
+        │
+        ▼
+price touched orders against a pre-computed FX/fee date-spine
+   (see below — not a per-row correlated subquery anymore)
+        │
+        ▼
+MERGE touched rows into fact_order (upsert by order_id, not full rebuild)
+        │
+        ▼
+re-run the 15 checks, scoped to the touched partition + a periodic full sweep
+        │
+        ▼
+advance the watermark only if checks pass
+```
+
+Concretely, three things I'd change first, in order of how soon they'd bite:
+
+1. **The FX/fee "as-of" lookups become a pre-joined date-spine, not a correlated subquery.**
+   `stg_order_priced` today re-runs `ORDER BY rate_date DESC LIMIT 1` once per order. That's fine at
+   109k orders; at 50x it's 50x the subquery evaluations. The fix keeps the exact same *logic*
+   (last rate/fee in force on-or-before the date) but computes it once: forward-fill
+   `raw_fx_rates`/`raw_platform_fees` across every calendar day with a window function into a
+   `(currency_code, date) → rate` and `(platform_code, date) → fee_pct` spine, then a plain
+   equi-join replaces the correlated subquery.
+2. **Late-arriving refunds need an explicit re-open rule, not an implicit one.** Right now a refund
+   landing this week against an order from three fiscal quarters ago still nets correctly, but only
+   because every run recomputes revenue from source. An incremental model has to decide, explicitly,
+   how far back a new refund re-opens an already-closed and already-reported period — that's a
+   Finance policy question (how many periods stay "open"?), not a SQL question, and I'd rather flag
+   it than guess at a cutoff.
+3. **The dedup key becomes the idempotency guarantee for retries, not just for the March incident.**
+   Defect #2's fix (`MAX(ingested_at)` per `order_id`) already means a loader retry or a re-sent
+   hourly batch can't double-count an order — that was true by accident here (fixing March) and
+   needs to be true by design at 50x, where retries are routine rather than a one-off outage.
+
+What I would *not* rebuild from scratch: the checks. All 15 stay meaningful at 50x — they're
+row-level and set-based (no order twice, no internal player, fee between 0 and 1), so they scale
+with the data and don't need rewriting, only re-scoping to run against the touched partition on
+every incremental run plus a full sweep on a slower cadence (nightly, say) to catch anything an
+incremental pass could miss — a schedule detail, which per the README's scope I'm describing rather
+than building.
