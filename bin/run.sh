@@ -7,16 +7,24 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Some environments expose Python as `python3`, others only as `python`
+# (notably Windows installs from python.org). Use whichever exists.
+if command -v python3 >/dev/null 2>&1; then
+    PY=python3
+else
+    PY=python
+fi
+
 echo "== building warehouse =="
-python3 bin/build.py
+"$PY" bin/build.py
 
 echo
 echo "== running checks =="
-python3 bin/test.py
+"$PY" bin/test.py
 
 echo
 echo "== FY2026 Q2 net revenue, by title =="
-python3 - <<'PYEOF'
+"$PY" - <<'PYEOF'
 import sqlite3
 con = sqlite3.connect("build/warehouse.db")
 cur = con.cursor()
