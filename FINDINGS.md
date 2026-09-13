@@ -1,6 +1,9 @@
 # FINDINGS — FY2026 Q2 net revenue
 
-Reproduce with: `bash bin/run.sh` (or `python3 bin/build.py && python3 bin/test.py`).
+Reproduce with: `bash bin/run.sh` (auto-detects `python3` vs `python`; if running the two
+scripts directly instead, use whichever your system has — `python3 bin/build.py && python3
+bin/test.py` on most Linux/Mac setups, `python bin/build.py && python bin/test.py` on a typical
+Windows install from python.org).
 
 ## Independent cross-checks
 
