@@ -1,5 +1,7 @@
--- fact_order must not contain an order more times than the landing table does
-SELECT f.order_id, COUNT(*) AS in_fact, (SELECT COUNT(*) FROM raw_orders o WHERE o.order_id = f.order_id) AS in_raw
-FROM fact_order f
-GROUP BY f.order_id
-HAVING COUNT(*) > (SELECT COUNT(*) FROM raw_orders o WHERE o.order_id = f.order_id);
+-- fact_order has exactly one row per order_id (D1 fan-out, D2 duplicate re-land)
+-- The original version compared against raw_orders, which itself holds the March re-land twice,
+-- so a doubled order passed. Uniqueness is the grain; the landing table is not the reference.
+SELECT order_id, COUNT(*) AS rows_in_fact
+FROM fact_order
+GROUP BY order_id
+HAVING COUNT(*) > 1;
