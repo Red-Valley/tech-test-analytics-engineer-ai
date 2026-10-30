@@ -7,20 +7,24 @@ FROM raw_titles;
 
 DROP TABLE IF EXISTS dim_studio;
 CREATE TABLE dim_studio AS
-SELECT studio_id, studio_name, region, founded_year FROM raw_studios;
+SELECT studio_id, studio_name, region, founded_year
+FROM raw_studios;
 
 DROP TABLE IF EXISTS bridge_title_studio;
 CREATE TABLE bridge_title_studio AS
-SELECT title_id, studio_id, credit_role FROM raw_title_studio_credits;
+SELECT title_id, studio_id, credit_role
+FROM raw_title_studio_credits;
 
 DROP TABLE IF EXISTS dim_player;
 CREATE TABLE dim_player AS
-SELECT player_id, country_code, currency_code, signup_date, acquisition_channel, email_domain
+SELECT player_id, country_code, currency_code, signup_date, acquisition_channel, email_domain,
+       CASE WHEN LOWER(email_domain) = 'twinhearth.test' THEN 1 ELSE 0 END AS is_test_account
 FROM raw_players;
 
 DROP TABLE IF EXISTS dim_platform;
 CREATE TABLE dim_platform AS
-SELECT DISTINCT platform_code FROM raw_orders;
+SELECT DISTINCT platform_code
+FROM raw_orders;
 
 -- Fiscal year starts on 1 October: FY2026 = 2025-10-01 .. 2026-09-30.
 DROP TABLE IF EXISTS dim_date;
@@ -38,7 +42,7 @@ SELECT dt                                                              AS date,
        'FY' || CASE WHEN CAST(strftime('%m', dt) AS INTEGER) >= 10
                     THEN CAST(strftime('%Y', dt) AS INTEGER) + 1
                     ELSE CAST(strftime('%Y', dt) AS INTEGER) END       AS fiscal_year,
-       ((CAST(strftime('%m', dt) AS INTEGER) - 10) % 12) / 3 + 1       AS fiscal_quarter_no,
-       ((CAST(strftime('%m', dt) AS INTEGER) - 10) % 12) + 1           AS fiscal_month_no,
+       (((CAST(strftime('%m', dt) AS INTEGER) + 2) % 12) / 3) + 1      AS fiscal_quarter_no,
+       ((CAST(strftime('%m', dt) AS INTEGER) + 2) % 12) + 1            AS fiscal_month_no,
        CASE WHEN strftime('%w', dt) IN ('0','6') THEN 1 ELSE 0 END     AS is_weekend
 FROM d;

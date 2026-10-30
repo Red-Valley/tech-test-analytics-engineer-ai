@@ -125,3 +125,15 @@ Two things that sink an otherwise strong submission:
 5. In the PR: time spent, how to run it, your FY2026 Q2 number, and the trade-offs you made.
 
 Expect to defend the number live.
+
+## Reproduce the repaired pipeline
+
+From the repository root, run:
+
+```bash
+python bin/run.py
+```
+
+This rebuilds `build/warehouse.db` from the checksum-verified landing files, runs the
+models, and executes all SQL assertions. The revenue fact is one row per order; it
+does not allocate order revenue to item lines.
